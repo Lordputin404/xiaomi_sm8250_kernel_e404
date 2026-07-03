@@ -1,0 +1,89 @@
+name: Build E404 Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      device:
+        description: "Device codename (e.g. munch, alioth, apollo, pipa, lmi, umi, cmi, cas)"
+        required: true
+        default: "munch"
+      anykernel_repo:
+        description: "Git URL of your AnyKernel3 repo"
+        required: true
+        default: "https://github.com/kvsnr113/AnyKernel3.git"
+      extra_args:
+        description: "Extra args passed to compile.sh (space separated, e.g. 'weekly changelog')"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+        with:
+          path: kernel
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison flex libssl-dev libelf-dev \
+            build-essential ccache zip curl git \
+            python3 python3-pip
+
+      - name: Setup ccache
+        run: |
+          mkdir -p ccache
+          ccache --max-size=5G
+
+      - name: Clone AnyKernel3
+        run: git clone --depth=1 "${{ github.event.inputs.anykernel_repo }}" AnyKernel3
+
+      - name: Sync latest Neutron Clang (via AntMan)
+        run: |
+          mkdir -p toolchains/neutron-clang
+          cd toolchains/neutron-clang
+          curl -LSs "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman" -o antman
+          chmod +x antman
+          ./antman -S
+
+      - name: Create Telegram config
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          GROUP_ID: ${{ secrets.GROUP_ID }}
+          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+          PRIVATE_ID: ${{ secrets.PRIVATE_ID }}
+        run: |
+          cat > telegram_api << EOF
+          BOT_TOKEN="${BOT_TOKEN}"
+          GROUP_ID="${GROUP_ID}"
+          CHANNEL_ID="${CHANNEL_ID}"
+          PRIVATE_ID="${PRIVATE_ID}"
+          EOF
+
+      - name: Run compile.sh
+        working-directory: kernel
+        run: |
+          chmod +x compile.sh
+          ./compile.sh "${{ github.event.inputs.device }}" neutron ${{ github.event.inputs.extra_args }}
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-zips-${{ github.event.inputs.device }}
+          path: kernel/out/*.zip
+          if-no-files-found: warn
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-build-log-${{ github.event.inputs.device }}
+          path: kernel/out/kernel_compile.log
+          if-no-files-found: ignore
+          
